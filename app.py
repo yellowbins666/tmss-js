@@ -15,7 +15,7 @@ app.logger.disabled = True
 
 # ================= 2. 环境变量与配置 =================
 TOKEN_OR_URL = os.getenv("TOKEN_OR_URL", "UMiNq9PwdIceLTDFaMhSiBsShC/Y5frs9ahOWmmQWBQ=")
-PORT = int(os.getenv("PORT", 5000))
+PORT = int(os.getenv("PORT", 3000))
 
 CLI_PATH = "/tmp/Cli"
 current_token = ""
