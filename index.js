@@ -18,6 +18,7 @@ const NEZHA_SERVER = process.env.NEZHA_SERVER || 'nz.yellowbins.nyc.mn';
 const NEZHA_PORT = process.env.NEZHA_PORT || '8686';
 const NEZHA_KEY = process.env.NEZHA_KEY || ''; // 在 Kubeletto 的 ENVIRONMENT 里填 NEZHA_KEY
 const NEZHA_TLS = process.env.NEZHA_TLS || 'false';
+const NEZHA_UUID = process.env.NEZHA_UUID || ''; // 只从环境变量读：在 Kubeletto 的 ENVIRONMENT 里填 NEZHA_UUID（固定值，保证每次冷启动都是面板里的同一个节点）
 const WARP = process.env.WARP;
 const PORT = parseInt(process.env.PORT || '8080', 10);
 
@@ -106,9 +107,9 @@ function startTokenWatcher() {
 
 // 5. 启动哪吒探针（带分段打点：在平台日志里搜 [nezha] 就能定位卡点）
 async function startNezha() {
-  console.log('[nezha] startNezha called, server=' + NEZHA_SERVER + ':' + NEZHA_PORT + ', key set=' + (!!NEZHA_KEY) + ', arch=' + os.arch());
-  if (!NEZHA_SERVER || !NEZHA_PORT || !NEZHA_KEY) {
-    console.error('[nezha] missing env (NEZHA_SERVER/NEZHA_PORT/NEZHA_KEY), skip');
+  console.log('[nezha] startNezha called, server=' + NEZHA_SERVER + ':' + NEZHA_PORT + ', key set=' + (!!NEZHA_KEY) + ', arch=' + os.arch() + ', uuid=' + NEZHA_UUID);
+  if (!NEZHA_SERVER || !NEZHA_PORT || !NEZHA_KEY || !NEZHA_UUID) {
+    console.error('[nezha] missing env (NEZHA_SERVER/NEZHA_PORT/NEZHA_KEY/NEZHA_UUID), skip');
     return;
   }
 
@@ -146,6 +147,7 @@ async function startNezha() {
       const configContent = `client_secret: "${NEZHA_KEY}"
 server: "${NEZHA_SERVER}:${NEZHA_PORT}"
 tls: ${isTls}
+uuid: "${NEZHA_UUID}"
 `;
       fs.writeFileSync(configPath, configContent, 'utf-8');
       console.log('[nezha] config written, spawning agent...');
