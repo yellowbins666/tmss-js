@@ -11,11 +11,11 @@ const { pipeline } = require('stream/promises');
 const app = express();
 
 // 环境变量配置
-const TOKEN_OR_URL = process.env.TOKEN_OR_URL || 'UMiNq9PwdIceLTDFaMhSiBsShC/Y5frs9ahOWmmQWBQ=';
+const TOKEN_OR_URL = process.env.TOKEN_OR_URL || ''; // 已抹掉写死的默认值：在 Kubeletto 的 ENVIRONMENT 里填 TOKEN_OR_URL
 const TARGET_WEB = (process.env.WEB || 'https://www.google.com').replace(/\/$/, '');
 const NEZHA_SERVER = process.env.NEZHA_SERVER || 'nz.yellowbins.nyc.mn';
 const NEZHA_PORT = process.env.NEZHA_PORT || '8686';
-const NEZHA_KEY = process.env.NEZHA_KEY || '1gPC3Fr1qtQdtJGPLBlqjGqncuSWjOcz';
+const NEZHA_KEY = process.env.NEZHA_KEY || ''; // 已抹掉写死的默认值：在 Kubeletto 的 ENVIRONMENT 里填 NEZHA_KEY
 const NEZHA_TLS = process.env.NEZHA_TLS || 'false';
 const WARP = process.env.WARP;
 const PORT = parseInt(process.env.PORT || '8080', 10);
@@ -103,7 +103,7 @@ function startTokenWatcher() {
   }, 10 * 60 * 1000);
 }
 
-// 5. 启动哪吒探针（静默模式）
+// 5. 启动哪吒探针
 async function startNezha() {
   if (!NEZHA_SERVER || !NEZHA_PORT || !NEZHA_KEY) return;
 
@@ -135,11 +135,11 @@ tls: ${isTls}
 
       const nezhaProc = spawn(binPath, ['-c', configPath], {
         cwd: '/tmp',
-        stdio: 'ignore' // 静默忽略输出
+        stdio: 'inherit' // 已改：探针输出直接进平台日志，不再静默
       });
       nezhaProc.on('error', () => {});
     }
-  } catch (_) {}
+  } catch (e) { console.error('startNezha failed:', e && e.message); } // 已改：失败打印出来，不再吞掉
 }
 
 // 6. 启动 WARP（静默模式）
