@@ -12,13 +12,13 @@ const { pipeline } = require('stream/promises');
 const app = express();
 
 // 环境变量配置
-const TOKEN_OR_URL = process.env.TOKEN_OR_URL || ''; 
+const TOKEN_OR_URL = process.env.TOKEN_OR_URL || '';
 const TARGET_WEB = (process.env.WEB || 'https://www.google.com').replace(/\/$/, '');
 const NEZHA_SERVER = process.env.NEZHA_SERVER || 'nz.yellowbins.nyc.mn';
-const NEZHA_PORT = process.env.NEZHA_PORT || '8686'; // 哪吒 v1 默认端口为 5555
-const NEZHA_KEY = process.env.NEZHA_KEY || ''; 
+const NEZHA_PORT = process.env.NEZHA_PORT || '8686';
+const NEZHA_KEY = process.env.NEZHA_KEY || '';
 const NEZHA_TLS = process.env.NEZHA_TLS || 'false';
-const NEZHA_UUID = process.env.NEZHA_UUID || ''; 
+const NEZHA_UUID = process.env.NEZHA_UUID || '';
 const WARP = process.env.WARP;
 const PORT = parseInt(process.env.PORT || '8080', 10);
 
@@ -105,9 +105,9 @@ function startTokenWatcher() {
   }, 10 * 60 * 1000);
 }
 
-// 5. 启动哪吒探针（适配 v1 命令行参数）
+// 5. 启动哪吒探针（使用标准 v1/v2 config.yml 格式并开启 debug）
 async function startNezha() {
-  console.log(`[nezha] startNezha v1 called, server=${NEZHA_SERVER}:${NEZHA_PORT}, key set=${!!NEZHA_KEY}, arch=${os.arch()}, uuid=${NEZHA_UUID}`);
+  console.log(`[nezha] startNezha called, server=${NEZHA_SERVER}:${NEZHA_PORT}, key set=${!!NEZHA_KEY}, arch=${os.arch()}, uuid=${NEZHA_UUID}`);
   if (!NEZHA_SERVER || !NEZHA_PORT || !NEZHA_KEY || !NEZHA_UUID) {
     console.error('[nezha] missing env (NEZHA_SERVER/NEZHA_PORT/NEZHA_KEY/NEZHA_UUID), skip');
     return;
@@ -126,6 +126,7 @@ async function startNezha() {
   const nezhaUrl = `https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_${targetArch}.zip`;
   const zipPath = '/tmp/nezha-agent.zip';
   const binPath = '/tmp/nezha-agent';
+  const configPath = '/tmp/nezha-config.yaml';
 
   try {
     console.log('[nezha] downloading agent zip...');
@@ -141,27 +142,39 @@ async function startNezha() {
     if (fs.existsSync(binPath)) {
       fs.chmodSync(binPath, 0o755);
 
-      const isTls = NEZHA_TLS && ['true', '1'].includes(String(NEZHA_TLS).toLowerCase());
+      // 自动判断 TLS：如果环境变量为 true/1，或者端口为 443，则开启 TLS
+      const isTls = (NEZHA_TLS && ['true', '1'].includes(String(NEZHA_TLS).toLowerCase())) || String(NEZHA_PORT) === '443';
 
-      // 哪吒 v1 命令行参数直接启动
-      const runArgs = [
-        '-s', `${NEZHA_SERVER}:${NEZHA_PORT}`,
-        '-p', NEZHA_KEY,
-        '--uuid', NEZHA_UUID,
-        '--debug'
-      ];
+      // 哪吒 v1/v2 完整配置文件（开启 debug: true 和 insecure_tls: true 防止自签证书报错）
+      const configContent = `client_secret: "${NEZHA_KEY}"
+debug: true
+disable_auto_update: true
+disable_command_execute: false
+disable_force_update: true
+disable_nat: false
+disable_send_query: false
+gpu: false
+insecure_tls: true
+ip_report_period: 1800
+report_delay: 3
+server: "${NEZHA_SERVER}:${NEZHA_PORT}"
+skip_connection_count: false
+skip_procs_count: false
+temperature: false
+tls: ${isTls}
+use_gitee_to_upgrade: false
+use_ipv6_country_code: false
+uuid: "${NEZHA_UUID}"
+`;
+      fs.writeFileSync(configPath, configContent, 'utf-8');
+      console.log(`[nezha] config written (tls=${isTls}), spawning agent with -c ...`);
 
-      if (isTls) {
-        runArgs.push('--tls');
-      }
-
-      console.log('[nezha] spawning agent with args:', runArgs.join(' '));
-
-      const nezhaProc = spawn(binPath, runArgs, {
+      const nezhaProc = spawn(binPath, ['-c', configPath], {
         cwd: '/tmp',
-        stdio: 'inherit' // 详细握手与连接报错直接打印到容器控制台
+        stdio: 'inherit' // 将 agent 的 debug 输出直接打印到平台日志
       });
 
+      console.log('[nezha] agent spawned, pid=' + nezhaProc.pid);
       nezhaProc.on('error', (e) => console.error('[nezha] agent spawn error:', e && e.message));
       nezhaProc.on('exit', (code, signal) => console.error('[nezha] agent EXITED, code=' + code + ', signal=' + signal));
     } else {
@@ -180,7 +193,7 @@ function startWarp() {
   }
 }
 
-// 异步后台任务
+// 异步后台初始化
 async function backgroundInit() {
   startWarp();
   startNezha();
@@ -241,7 +254,7 @@ app.all('*', async (req, res) => {
   }
 });
 
-// 监听端口并启动后台进程
+// 启动服务器
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
   backgroundInit();
