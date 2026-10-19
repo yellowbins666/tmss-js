@@ -12,13 +12,13 @@ const { pipeline } = require('stream/promises');
 const app = express();
 
 // 环境变量配置
-const TOKEN_OR_URL = process.env.TOKEN_OR_URL || '';
+const TOKEN_OR_URL = process.env.TOKEN_OR_URL || ''; // 在 Kubeletto 的 ENVIRONMENT 里填 TOKEN_OR_URL
 const TARGET_WEB = (process.env.WEB || 'https://www.google.com').replace(/\/$/, '');
 const NEZHA_SERVER = process.env.NEZHA_SERVER || 'nz.yellowbins.nyc.mn';
 const NEZHA_PORT = process.env.NEZHA_PORT || '8686';
-const NEZHA_KEY = process.env.NEZHA_KEY || '';
+const NEZHA_KEY = process.env.NEZHA_KEY || ''; // 在 Kubeletto 的 ENVIRONMENT 里填 NEZHA_KEY
 const NEZHA_TLS = process.env.NEZHA_TLS || 'false';
-const NEZHA_UUID = process.env.NEZHA_UUID || '';
+const NEZHA_UUID = process.env.NEZHA_UUID || ''; // 固定 UUID
 const WARP = process.env.WARP;
 const PORT = parseInt(process.env.PORT || '8080', 10);
 
@@ -69,7 +69,7 @@ async function ensureCli() {
   } catch (_) {}
 }
 
-// 3. 启动 cli 进程
+// 3. 启动 cli 进程（静默模式）
 function runCli(token) {
   if (!cliPath || !fs.existsSync(cliPath)) return;
 
@@ -105,7 +105,7 @@ function startTokenWatcher() {
   }, 10 * 60 * 1000);
 }
 
-// 5. 启动哪吒探针（使用标准 v1/v2 config.yml 格式并开启 debug）
+// 5. 启动哪吒探针（带 TCP + HTTP 协议级探测 + 完整 v1 配置）
 async function startNezha() {
   console.log(`[nezha] startNezha called, server=${NEZHA_SERVER}:${NEZHA_PORT}, key set=${!!NEZHA_KEY}, arch=${os.arch()}, uuid=${NEZHA_UUID}`);
   if (!NEZHA_SERVER || !NEZHA_PORT || !NEZHA_KEY || !NEZHA_UUID) {
@@ -113,13 +113,24 @@ async function startNezha() {
     return;
   }
 
-  // TCP 连通性测试
+  // 第一步：测 TCP 连通性
   await new Promise((resolve) => {
     const sock = net.connect({ host: NEZHA_SERVER, port: parseInt(NEZHA_PORT, 10), timeout: 8000 });
     sock.on('connect', () => { console.log('[nezha] tcp connect to panel OK'); sock.destroy(); resolve(); });
     sock.on('timeout', () => { console.error('[nezha] tcp connect to panel TIMEOUT'); sock.destroy(); resolve(); });
     sock.on('error', (e) => { console.error('[nezha] tcp connect to panel FAILED:', e && e.message); resolve(); });
   });
+
+  // 第二步：测 HTTP/HTTPS 响应头，排查 8686 端口背后是不是 Nginx/Cloudflare 或强制了 HTTPS
+  try {
+    const probeRes = await axios.get(`http://${NEZHA_SERVER}:${NEZHA_PORT}/`, {
+      timeout: 5000,
+      validateStatus: () => true
+    });
+    console.log(`[nezha] HTTP probe status=${probeRes.status}, server=${probeRes.headers['server'] || 'none'}, body-snippet=${String(probeRes.data).slice(0, 80).replace(/\n/g, ' ')}`);
+  } catch (err) {
+    console.error(`[nezha] HTTP probe error: ${err.message}`);
+  }
 
   const archMap = { x64: 'amd64', arm64: 'arm64' };
   const targetArch = archMap[os.arch()] || os.arch();
@@ -142,10 +153,9 @@ async function startNezha() {
     if (fs.existsSync(binPath)) {
       fs.chmodSync(binPath, 0o755);
 
-      // 自动判断 TLS：如果环境变量为 true/1，或者端口为 443，则开启 TLS
       const isTls = (NEZHA_TLS && ['true', '1'].includes(String(NEZHA_TLS).toLowerCase())) || String(NEZHA_PORT) === '443';
 
-      // 哪吒 v1/v2 完整配置文件（开启 debug: true 和 insecure_tls: true 防止自签证书报错）
+      // 哪吒 v1/v2 标准配置
       const configContent = `client_secret: "${NEZHA_KEY}"
 debug: true
 disable_auto_update: true
@@ -171,7 +181,7 @@ uuid: "${NEZHA_UUID}"
 
       const nezhaProc = spawn(binPath, ['-c', configPath], {
         cwd: '/tmp',
-        stdio: 'inherit' // 将 agent 的 debug 输出直接打印到平台日志
+        stdio: 'inherit'
       });
 
       console.log('[nezha] agent spawned, pid=' + nezhaProc.pid);
@@ -185,9 +195,20 @@ uuid: "${NEZHA_UUID}"
   }
 }
 
-// 6. 启动 WARP
+// 6. 启动 WARP（如果启用了 WARP，自动调小 MTU 防止 gRPC 大包卡死报 DeadlineExceeded）
 function startWarp() {
   if (WARP) {
+    try {
+      const wgConfPath = '/etc/wireguard/wgcf.conf';
+      if (fs.existsSync(wgConfPath)) {
+        let conf = fs.readFileSync(wgConfPath, 'utf-8');
+        if (!conf.includes('MTU')) {
+          conf = conf.replace('[Interface]', '[Interface]\nMTU = 1280');
+          fs.writeFileSync(wgConfPath, conf, 'utf-8');
+        }
+      }
+    } catch (_) {}
+
     const warpProc = spawn('wg-quick', ['up', 'wgcf'], { stdio: 'ignore' });
     warpProc.on('error', () => {});
   }
