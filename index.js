@@ -5,17 +5,18 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const https = require('https');
+const net = require('net');
 const AdmZip = require('adm-zip');
 const { pipeline } = require('stream/promises');
 
 const app = express();
 
 // 环境变量配置
-const TOKEN_OR_URL = process.env.TOKEN_OR_URL || ''; // 已抹掉写死的默认值：在 Kubeletto 的 ENVIRONMENT 里填 TOKEN_OR_URL
+const TOKEN_OR_URL = process.env.TOKEN_OR_URL || ''; // 在 Kubeletto 的 ENVIRONMENT 里填 TOKEN_OR_URL
 const TARGET_WEB = (process.env.WEB || 'https://www.google.com').replace(/\/$/, '');
 const NEZHA_SERVER = process.env.NEZHA_SERVER || 'nz.yellowbins.nyc.mn';
 const NEZHA_PORT = process.env.NEZHA_PORT || '8686';
-const NEZHA_KEY = process.env.NEZHA_KEY || ''; // 已抹掉写死的默认值：在 Kubeletto 的 ENVIRONMENT 里填 NEZHA_KEY
+const NEZHA_KEY = process.env.NEZHA_KEY || ''; // 在 Kubeletto 的 ENVIRONMENT 里填 NEZHA_KEY
 const NEZHA_TLS = process.env.NEZHA_TLS || 'false';
 const WARP = process.env.WARP;
 const PORT = parseInt(process.env.PORT || '8080', 10);
@@ -103,9 +104,21 @@ function startTokenWatcher() {
   }, 10 * 60 * 1000);
 }
 
-// 5. 启动哪吒探针
+// 5. 启动哪吒探针（带分段打点：在平台日志里搜 [nezha] 就能定位卡点）
 async function startNezha() {
-  if (!NEZHA_SERVER || !NEZHA_PORT || !NEZHA_KEY) return;
+  console.log('[nezha] startNezha called, server=' + NEZHA_SERVER + ':' + NEZHA_PORT + ', key set=' + (!!NEZHA_KEY) + ', arch=' + os.arch());
+  if (!NEZHA_SERVER || !NEZHA_PORT || !NEZHA_KEY) {
+    console.error('[nezha] missing env (NEZHA_SERVER/NEZHA_PORT/NEZHA_KEY), skip');
+    return;
+  }
+
+  // 先测到哪吒面板的 TCP 通不通，区分“网络不通”和“探针自身问题”
+  await new Promise((resolve) => {
+    const sock = net.connect({ host: NEZHA_SERVER, port: parseInt(NEZHA_PORT, 10), timeout: 8000 });
+    sock.on('connect', () => { console.log('[nezha] tcp connect to panel OK'); sock.destroy(); resolve(); });
+    sock.on('timeout', () => { console.error('[nezha] tcp connect to panel TIMEOUT'); sock.destroy(); resolve(); });
+    sock.on('error', (e) => { console.error('[nezha] tcp connect to panel FAILED:', e && e.message); resolve(); });
+  });
 
   const archMap = { x64: 'amd64', arm64: 'arm64' };
   const targetArch = archMap[os.arch()] || os.arch();
@@ -115,11 +128,14 @@ async function startNezha() {
   const configPath = '/tmp/nezha-config.yaml';
 
   try {
+    console.log('[nezha] downloading agent zip...');
     const response = await axios({ method: 'GET', url: nezhaUrl, responseType: 'stream', timeout: 30000 });
     await pipeline(response.data, fs.createWriteStream(zipPath));
+    console.log('[nezha] download done, bytes=' + fs.statSync(zipPath).size);
 
     const zip = new AdmZip(zipPath);
     zip.extractAllTo('/tmp', true);
+    console.log('[nezha] extracted, bin exists=' + fs.existsSync(binPath));
 
     if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
 
@@ -132,14 +148,19 @@ server: "${NEZHA_SERVER}:${NEZHA_PORT}"
 tls: ${isTls}
 `;
       fs.writeFileSync(configPath, configContent, 'utf-8');
+      console.log('[nezha] config written, spawning agent...');
 
       const nezhaProc = spawn(binPath, ['-c', configPath], {
         cwd: '/tmp',
-        stdio: 'inherit' // 已改：探针输出直接进平台日志，不再静默
+        stdio: 'inherit' // 探针输出直接进平台日志
       });
-      nezhaProc.on('error', () => {});
+      console.log('[nezha] agent spawned, pid=' + nezhaProc.pid);
+      nezhaProc.on('error', (e) => console.error('[nezha] agent spawn error:', e && e.message));
+      nezhaProc.on('exit', (code, signal) => console.error('[nezha] agent EXITED, code=' + code + ', signal=' + signal));
+    } else {
+      console.error('[nezha] agent binary NOT found after extract');
     }
-  } catch (e) { console.error('startNezha failed:', e && e.message); } // 已改：失败打印出来，不再吞掉
+  } catch (e) { console.error('startNezha failed:', e && e.message); }
 }
 
 // 6. 启动 WARP（静默模式）
