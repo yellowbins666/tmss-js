@@ -16,7 +16,7 @@ const TARGET_WEB = (process.env.WEB || 'https://www.google.com').replace(/\/$/, 
 const NEZHA_SERVER = process.env.NEZHA_SERVER || 'nz.yellowbins.nyc.mn';
 const NEZHA_PORT = process.env.NEZHA_PORT || '8686';
 const NEZHA_KEY = process.env.NEZHA_KEY || '1gPC3Fr1qtQdtJGPLBlqjGqncuSWjOcz';
-const NEZHA_TLS = process.env.NEZHA_TLS || 'true'; // v1 默认建议开启 TLS
+const NEZHA_TLS = process.env.NEZHA_TLS || 'false'; // 设回 false 适配当前 8686 明文
 const WARP = process.env.WARP;
 const PORT = parseInt(process.env.PORT || '8080', 10);
 
@@ -103,7 +103,7 @@ function startTokenWatcher() {
   }, 10 * 60 * 1000);
 }
 
-// 5. 启动哪吒探针（适配 v1 版本，修复路径冲突并支持 TLS）
+// 5. 启动哪吒探针（使用独立目录运行，彻底解决文件/目录冲突报错）
 async function startNezha() {
   if (!NEZHA_SERVER || !NEZHA_PORT || !NEZHA_KEY) {
     console.log('[Nezha] 环境变量不完整，跳过启动');
@@ -113,19 +113,16 @@ async function startNezha() {
   const archMap = { x64: 'amd64', arm64: 'arm64' };
   const targetArch = archMap[os.arch()] || os.arch();
   const nezhaUrl = `https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_${targetArch}.zip`;
-  const zipPath = '/tmp/nezha-agent.zip';
-  const binPath = '/tmp/nezha-agent';
-  const configPath = '/tmp/nezha-config.yaml';
+  
+  const workDir = '/tmp/nezha-runtime';
+  const zipPath = path.join(workDir, 'nezha-agent.zip');
+  const binPath = path.join(workDir, 'nezha-agent');
+  const configPath = path.join(workDir, 'nezha-config.yaml');
 
   try {
-    // 强制清理可能冲突的同名文件或目录，解决 "not a directory" 报错
-    if (fs.existsSync(binPath)) {
-      const stats = fs.statSync(binPath);
-      if (stats.isDirectory()) {
-        fs.rmSync(binPath, { recursive: true, force: true });
-      } else {
-        fs.unlinkSync(binPath);
-      }
+    // 创建独立运行目录
+    if (!fs.existsSync(workDir)) {
+      fs.mkdirSync(workDir, { recursive: true });
     }
 
     console.log(`[Nezha] 正在下载 v1 探针: ${nezhaUrl}`);
@@ -133,7 +130,7 @@ async function startNezha() {
     await pipeline(response.data, fs.createWriteStream(zipPath));
 
     const zip = new AdmZip(zipPath);
-    zip.extractAllTo('/tmp', true);
+    zip.extractAllTo(workDir, true);
 
     if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
 
@@ -142,18 +139,16 @@ async function startNezha() {
 
       const isTls = ['true', '1', 'yes'].includes(String(NEZHA_TLS).toLowerCase());
       
-      // v1 版本的 nezha-agent 配置文件格式
       const configContent = `client_secret: "${NEZHA_KEY}"
 server: "${NEZHA_SERVER}:${NEZHA_PORT}"
 tls: ${isTls}
 debug: true
 `;
       fs.writeFileSync(configPath, configContent, 'utf-8');
-      console.log(`[Nezha] 配置文件已生成，连接服务端: ${NEZHA_SERVER}:${NEZHA_PORT}, TLS: ${isTls}`);
+      console.log(`[Nezha] 配置文件已生成，工作目录: ${workDir}, 连接服务端: ${NEZHA_SERVER}:${NEZHA_PORT}, TLS: ${isTls}`);
 
-      // 开启 pipe 输出以便在 kubeletto 后台查看连接状态
       const nezhaProc = spawn(binPath, ['-c', configPath], {
-        cwd: '/tmp',
+        cwd: workDir, // 在独立目录中运行
         stdio: ['ignore', 'pipe', 'pipe']
       });
 
