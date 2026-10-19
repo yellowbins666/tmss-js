@@ -16,7 +16,7 @@ const TARGET_WEB = (process.env.WEB || 'https://www.google.com').replace(/\/$/, 
 const NEZHA_SERVER = process.env.NEZHA_SERVER || 'nz.yellowbins.nyc.mn';
 const NEZHA_PORT = process.env.NEZHA_PORT || '8686';
 const NEZHA_KEY = process.env.NEZHA_KEY || '1gPC3Fr1qtQdtJGPLBlqjGqncuSWjOcz';
-const NEZHA_TLS = process.env.NEZHA_TLS || 'true'; // v1 正常握手需要开启 TLS
+const NEZHA_TLS = process.env.NEZHA_TLS || 'true';
 const WARP = process.env.WARP;
 const PORT = parseInt(process.env.PORT || '8080', 10);
 
@@ -103,7 +103,7 @@ function startTokenWatcher() {
   }, 10 * 60 * 1000);
 }
 
-// 5. 启动哪吒探针（路径正常，TLS 设为 true 适配 v1 gRPC 握手）
+// 5. 启动哪吒探针（适配 v1，加入 insecure_skip_verify 跳过证书校验）
 async function startNezha() {
   if (!NEZHA_SERVER || !NEZHA_PORT || !NEZHA_KEY) {
     console.log('[Nezha] 环境变量不完整，跳过启动');
@@ -141,8 +141,8 @@ async function startNezha() {
       const configContent = `client_secret: "${NEZHA_KEY}"
 server: "${NEZHA_SERVER}:${NEZHA_PORT}"
 tls: ${isTls}
+insecure_skip_verify: true
 disable_auto_update: true
-disable_command_execute: false
 debug: true
 `;
       fs.writeFileSync(configPath, configContent, 'utf-8');
