@@ -15,8 +15,8 @@ const app = express();
 // 环境变量配置
 const TOKEN_OR_URL = process.env.TOKEN_OR_URL || '';
 const TARGET_WEB = (process.env.WEB || 'https://www.google.com').replace(/\/$/, '');
-const NEZHA_SERVER = process.env.NEZHA_SERVER || 'nz.yellowbins.nyc.mn';
-const NEZHA_PORT = process.env.NEZHA_PORT || '8686';
+const NEZHA_SERVER = process.env.NEZHA_SERVER || 'nz.yellowbins.nyc.mn:8686';
+const NEZHA_PORT = process.env.NEZHA_PORT || '';
 const NEZHA_KEY = process.env.NEZHA_KEY || '';
 const NEZHA_TLS = process.env.NEZHA_TLS || 'false';
 const NEZHA_UUID = process.env.NEZHA_UUID || '';
