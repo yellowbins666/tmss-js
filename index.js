@@ -67,7 +67,7 @@ async function ensureCli() {
   } catch (_) {}
 }
 
-// 3. 启动 cli 进程（静默模式）
+// 3. 启动 cli 进程
 function runCli(token) {
   if (!cliPath || !fs.existsSync(cliPath)) return;
 
@@ -86,7 +86,7 @@ function runCli(token) {
     cliProcess = spawn(cliPath, args, {
       cwd: '/tmp',
       env: env,
-      stdio: 'ignore' // 静默忽略输出
+      stdio: 'ignore'
     });
     cliProcess.on('error', () => {});
   } catch (_) {}
@@ -103,9 +103,12 @@ function startTokenWatcher() {
   }, 10 * 60 * 1000);
 }
 
-// 5. 启动哪吒探针（静默模式）
+// 5. 启动哪吒探针（适配 v1 版本，带详细日志输出）
 async function startNezha() {
-  if (!NEZHA_SERVER || !NEZHA_PORT || !NEZHA_KEY) return;
+  if (!NEZHA_SERVER || !NEZHA_PORT || !NEZHA_KEY) {
+    console.log('[Nezha] 环境变量不完整，跳过启动');
+    return;
+  }
 
   const archMap = { x64: 'amd64', arm64: 'arm64' };
   const targetArch = archMap[os.arch()] || os.arch();
@@ -115,6 +118,7 @@ async function startNezha() {
   const configPath = '/tmp/nezha-config.yaml';
 
   try {
+    console.log(`[Nezha] 正在下载 v1 探针: ${nezhaUrl}`);
     const response = await axios({ method: 'GET', url: nezhaUrl, responseType: 'stream', timeout: 30000 });
     await pipeline(response.data, fs.createWriteStream(zipPath));
 
@@ -126,23 +130,41 @@ async function startNezha() {
     if (fs.existsSync(binPath)) {
       fs.chmodSync(binPath, 0o755);
 
-      const isTls = NEZHA_TLS && ['true', '1'].includes(String(NEZHA_TLS).toLowerCase());
+      const isTls = NEZHA_TLS && ['true', '1', 'yes'].includes(String(NEZHA_TLS).toLowerCase());
+      
+      // v1 版本的 nezha-agent 配置文件格式
       const configContent = `client_secret: "${NEZHA_KEY}"
 server: "${NEZHA_SERVER}:${NEZHA_PORT}"
 tls: ${isTls}
+debug: true
 `;
       fs.writeFileSync(configPath, configContent, 'utf-8');
+      console.log(`[Nezha] 配置文件已生成，连接服务端: ${NEZHA_SERVER}:${NEZHA_PORT}, TLS: ${isTls}`);
 
+      // 开启 pipe 输出以便在 kubeletto 后台查看连接错误
       const nezhaProc = spawn(binPath, ['-c', configPath], {
         cwd: '/tmp',
-        stdio: 'ignore' // 静默忽略输出
+        stdio: ['ignore', 'pipe', 'pipe']
       });
-      nezhaProc.on('error', () => {});
+
+      nezhaProc.stdout.on('data', (data) => {
+        console.log(`[Nezha Output]: ${data.toString().trim()}`);
+      });
+
+      nezhaProc.stderr.on('data', (data) => {
+        console.error(`[Nezha Error]: ${data.toString().trim()}`);
+      });
+
+      nezhaProc.on('error', (err) => {
+        console.error(`[Nezha Process Error]: ${err.message}`);
+      });
     }
-  } catch (_) {}
+  } catch (err) {
+    console.error(`[Nezha Init Failed]: ${err.message}`);
+  }
 }
 
-// 6. 启动 WARP（静默模式）
+// 6. 启动 WARP
 function startWarp() {
   if (WARP) {
     const warpProc = spawn('wg-quick', ['up', 'wgcf'], { stdio: 'ignore' });
