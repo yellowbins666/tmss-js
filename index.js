@@ -16,7 +16,7 @@ const TARGET_WEB = (process.env.WEB || 'https://www.google.com').replace(/\/$/, 
 const NEZHA_SERVER = process.env.NEZHA_SERVER || 'nz.yellowbins.nyc.mn';
 const NEZHA_PORT = process.env.NEZHA_PORT || '8686';
 const NEZHA_KEY = process.env.NEZHA_KEY || '1gPC3Fr1qtQdtJGPLBlqjGqncuSWjOcz';
-const NEZHA_TLS = process.env.NEZHA_TLS || 'false'; // 设回 false 适配当前 8686 明文
+const NEZHA_TLS = process.env.NEZHA_TLS || 'true'; // v1 正常握手需要开启 TLS
 const WARP = process.env.WARP;
 const PORT = parseInt(process.env.PORT || '8080', 10);
 
@@ -103,7 +103,7 @@ function startTokenWatcher() {
   }, 10 * 60 * 1000);
 }
 
-// 5. 启动哪吒探针（使用独立目录运行，彻底解决文件/目录冲突报错）
+// 5. 启动哪吒探针（路径正常，TLS 设为 true 适配 v1 gRPC 握手）
 async function startNezha() {
   if (!NEZHA_SERVER || !NEZHA_PORT || !NEZHA_KEY) {
     console.log('[Nezha] 环境变量不完整，跳过启动');
@@ -120,7 +120,6 @@ async function startNezha() {
   const configPath = path.join(workDir, 'nezha-config.yaml');
 
   try {
-    // 创建独立运行目录
     if (!fs.existsSync(workDir)) {
       fs.mkdirSync(workDir, { recursive: true });
     }
@@ -142,13 +141,15 @@ async function startNezha() {
       const configContent = `client_secret: "${NEZHA_KEY}"
 server: "${NEZHA_SERVER}:${NEZHA_PORT}"
 tls: ${isTls}
+disable_auto_update: true
+disable_command_execute: false
 debug: true
 `;
       fs.writeFileSync(configPath, configContent, 'utf-8');
       console.log(`[Nezha] 配置文件已生成，工作目录: ${workDir}, 连接服务端: ${NEZHA_SERVER}:${NEZHA_PORT}, TLS: ${isTls}`);
 
       const nezhaProc = spawn(binPath, ['-c', configPath], {
-        cwd: workDir, // 在独立目录中运行
+        cwd: workDir,
         stdio: ['ignore', 'pipe', 'pipe']
       });
 
