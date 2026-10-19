@@ -6,19 +6,20 @@ const os = require('os');
 const path = require('path');
 const https = require('https');
 const net = require('net');
+const dns = require('dns').promises;
 const AdmZip = require('adm-zip');
 const { pipeline } = require('stream/promises');
 
 const app = express();
 
 // 环境变量配置
-const TOKEN_OR_URL = process.env.TOKEN_OR_URL || ''; // 在 Kubeletto 的 ENVIRONMENT 里填 TOKEN_OR_URL
+const TOKEN_OR_URL = process.env.TOKEN_OR_URL || '';
 const TARGET_WEB = (process.env.WEB || 'https://www.google.com').replace(/\/$/, '');
 const NEZHA_SERVER = process.env.NEZHA_SERVER || 'nz.yellowbins.nyc.mn';
 const NEZHA_PORT = process.env.NEZHA_PORT || '8686';
-const NEZHA_KEY = process.env.NEZHA_KEY || ''; // 在 Kubeletto 的 ENVIRONMENT 里填 NEZHA_KEY
+const NEZHA_KEY = process.env.NEZHA_KEY || '';
 const NEZHA_TLS = process.env.NEZHA_TLS || 'false';
-const NEZHA_UUID = process.env.NEZHA_UUID || ''; // 固定 UUID
+const NEZHA_UUID = process.env.NEZHA_UUID || '';
 const WARP = process.env.WARP;
 const PORT = parseInt(process.env.PORT || '8080', 10);
 
@@ -69,7 +70,7 @@ async function ensureCli() {
   } catch (_) {}
 }
 
-// 3. 启动 cli 进程（静默模式）
+// 3. 启动 cli 进程
 function runCli(token) {
   if (!cliPath || !fs.existsSync(cliPath)) return;
 
@@ -105,7 +106,7 @@ function startTokenWatcher() {
   }, 10 * 60 * 1000);
 }
 
-// 5. 启动哪吒探针（带 TCP + HTTP 协议级探测 + 完整 v1 配置）
+// 5. 启动哪吒探针（强制解析 IPv4 + 协议诊断）
 async function startNezha() {
   console.log(`[nezha] startNezha called, server=${NEZHA_SERVER}:${NEZHA_PORT}, key set=${!!NEZHA_KEY}, arch=${os.arch()}, uuid=${NEZHA_UUID}`);
   if (!NEZHA_SERVER || !NEZHA_PORT || !NEZHA_KEY || !NEZHA_UUID) {
@@ -113,23 +114,28 @@ async function startNezha() {
     return;
   }
 
-  // 第一步：测 TCP 连通性
-  await new Promise((resolve) => {
-    const sock = net.connect({ host: NEZHA_SERVER, port: parseInt(NEZHA_PORT, 10), timeout: 8000 });
-    sock.on('connect', () => { console.log('[nezha] tcp connect to panel OK'); sock.destroy(); resolve(); });
-    sock.on('timeout', () => { console.error('[nezha] tcp connect to panel TIMEOUT'); sock.destroy(); resolve(); });
-    sock.on('error', (e) => { console.error('[nezha] tcp connect to panel FAILED:', e && e.message); resolve(); });
-  });
-
-  // 第二步：测 HTTP/HTTPS 响应头，排查 8686 端口背后是不是 Nginx/Cloudflare 或强制了 HTTPS
+  // 强制解析为 IPv4，防止容器内 IPv6 黑洞导致 gRPC 卡死报 DeadlineExceeded
+  let targetHost = NEZHA_SERVER;
   try {
-    const probeRes = await axios.get(`http://${NEZHA_SERVER}:${NEZHA_PORT}/`, {
+    const ipv4List = await dns.resolve4(NEZHA_SERVER);
+    if (ipv4List && ipv4List.length > 0) {
+      targetHost = ipv4List[0];
+      console.log(`[nezha] resolved ${NEZHA_SERVER} to IPv4: ${targetHost}`);
+    }
+  } catch (e) {
+    console.log(`[nezha] dns resolve4 skipped or already IP: ${e.message}`);
+  }
+
+  // HTTP 探测：如果 8686 是哪吒 v1 面板，访问 / 应该返回 200（哪吒监控网页 HTML）
+  // 如果访问 / 直接断开或返回乱码，说明 8686 只是纯 gRPC 端口（即面板其实是 v0 版本或开启了 TLS）
+  try {
+    const probeRes = await axios.get(`http://${targetHost}:${NEZHA_PORT}/`, {
       timeout: 5000,
       validateStatus: () => true
     });
-    console.log(`[nezha] HTTP probe status=${probeRes.status}, server=${probeRes.headers['server'] || 'none'}, body-snippet=${String(probeRes.data).slice(0, 80).replace(/\n/g, ' ')}`);
+    console.log(`[nezha] HTTP probe to ${targetHost}:${NEZHA_PORT} -> status=${probeRes.status}, title-check=${String(probeRes.data).slice(0, 100).replace(/\s+/g, ' ')}`);
   } catch (err) {
-    console.error(`[nezha] HTTP probe error: ${err.message}`);
+    console.error(`[nezha] HTTP probe error (8686 may NOT be plain HTTP): ${err.message}`);
   }
 
   const archMap = { x64: 'amd64', arm64: 'arm64' };
@@ -143,11 +149,9 @@ async function startNezha() {
     console.log('[nezha] downloading agent zip...');
     const response = await axios({ method: 'GET', url: nezhaUrl, responseType: 'stream', timeout: 30000 });
     await pipeline(response.data, fs.createWriteStream(zipPath));
-    console.log('[nezha] download done, bytes=' + fs.statSync(zipPath).size);
 
     const zip = new AdmZip(zipPath);
     zip.extractAllTo('/tmp', true);
-
     if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
 
     if (fs.existsSync(binPath)) {
@@ -155,7 +159,7 @@ async function startNezha() {
 
       const isTls = (NEZHA_TLS && ['true', '1'].includes(String(NEZHA_TLS).toLowerCase())) || String(NEZHA_PORT) === '443';
 
-      // 哪吒 v1/v2 标准配置
+      // 使用解析后的纯 IPv4 地址写入配置
       const configContent = `client_secret: "${NEZHA_KEY}"
 debug: true
 disable_auto_update: true
@@ -167,7 +171,7 @@ gpu: false
 insecure_tls: true
 ip_report_period: 1800
 report_delay: 3
-server: "${NEZHA_SERVER}:${NEZHA_PORT}"
+server: "${targetHost}:${NEZHA_PORT}"
 skip_connection_count: false
 skip_procs_count: false
 temperature: false
@@ -177,7 +181,7 @@ use_ipv6_country_code: false
 uuid: "${NEZHA_UUID}"
 `;
       fs.writeFileSync(configPath, configContent, 'utf-8');
-      console.log(`[nezha] config written (tls=${isTls}), spawning agent with -c ...`);
+      console.log(`[nezha] config written (server=${targetHost}:${NEZHA_PORT}, tls=${isTls}), spawning agent...`);
 
       const nezhaProc = spawn(binPath, ['-c', configPath], {
         cwd: '/tmp',
@@ -187,15 +191,13 @@ uuid: "${NEZHA_UUID}"
       console.log('[nezha] agent spawned, pid=' + nezhaProc.pid);
       nezhaProc.on('error', (e) => console.error('[nezha] agent spawn error:', e && e.message));
       nezhaProc.on('exit', (code, signal) => console.error('[nezha] agent EXITED, code=' + code + ', signal=' + signal));
-    } else {
-      console.error('[nezha] agent binary NOT found after extract');
     }
   } catch (e) {
     console.error('[nezha] startNezha failed:', e && e.message);
   }
 }
 
-// 6. 启动 WARP（如果启用了 WARP，自动调小 MTU 防止 gRPC 大包卡死报 DeadlineExceeded）
+// 6. 启动 WARP
 function startWarp() {
   if (WARP) {
     try {
