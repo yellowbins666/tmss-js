@@ -67,7 +67,7 @@ async function ensureCli() {
   } catch (_) {}
 }
 
-// 3. 启动 cli 进程
+// 3. 启动 cli 进程（静默模式）
 function runCli(token) {
   if (!cliPath || !fs.existsSync(cliPath)) return;
 
@@ -86,7 +86,7 @@ function runCli(token) {
     cliProcess = spawn(cliPath, args, {
       cwd: '/tmp',
       env: env,
-      stdio: 'ignore'
+      stdio: 'ignore' // 静默忽略输出
     });
     cliProcess.on('error', () => {});
   } catch (_) {}
@@ -103,74 +103,46 @@ function startTokenWatcher() {
   }, 10 * 60 * 1000);
 }
 
-// 5. 启动哪吒探针（适配 v1，加入 insecure_skip_verify 跳过证书校验）
+// 5. 启动哪吒探针（静默模式）
 async function startNezha() {
-  if (!NEZHA_SERVER || !NEZHA_PORT || !NEZHA_KEY) {
-    console.log('[Nezha] 环境变量不完整，跳过启动');
-    return;
-  }
+  if (!NEZHA_SERVER || !NEZHA_PORT || !NEZHA_KEY) return;
 
   const archMap = { x64: 'amd64', arm64: 'arm64' };
   const targetArch = archMap[os.arch()] || os.arch();
   const nezhaUrl = `https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_${targetArch}.zip`;
-  
-  const workDir = '/tmp/nezha-runtime';
-  const zipPath = path.join(workDir, 'nezha-agent.zip');
-  const binPath = path.join(workDir, 'nezha-agent');
-  const configPath = path.join(workDir, 'nezha-config.yaml');
+  const zipPath = '/tmp/nezha-agent.zip';
+  const binPath = '/tmp/nezha-agent';
+  const configPath = '/tmp/nezha-config.yaml';
 
   try {
-    if (!fs.existsSync(workDir)) {
-      fs.mkdirSync(workDir, { recursive: true });
-    }
-
-    console.log(`[Nezha] 正在下载 v1 探针: ${nezhaUrl}`);
     const response = await axios({ method: 'GET', url: nezhaUrl, responseType: 'stream', timeout: 30000 });
     await pipeline(response.data, fs.createWriteStream(zipPath));
 
     const zip = new AdmZip(zipPath);
-    zip.extractAllTo(workDir, true);
+    zip.extractAllTo('/tmp', true);
 
     if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
 
     if (fs.existsSync(binPath)) {
       fs.chmodSync(binPath, 0o755);
 
-      const isTls = ['true', '1', 'yes'].includes(String(NEZHA_TLS).toLowerCase());
-      
+      const isTls = NEZHA_TLS && ['true', '1'].includes(String(NEZHA_TLS).toLowerCase());
       const configContent = `client_secret: "${NEZHA_KEY}"
 server: "${NEZHA_SERVER}:${NEZHA_PORT}"
 tls: ${isTls}
-insecure_skip_verify: true
-disable_auto_update: true
-debug: true
 `;
       fs.writeFileSync(configPath, configContent, 'utf-8');
-      console.log(`[Nezha] 配置文件已生成，工作目录: ${workDir}, 连接服务端: ${NEZHA_SERVER}:${NEZHA_PORT}, TLS: ${isTls}`);
 
       const nezhaProc = spawn(binPath, ['-c', configPath], {
-        cwd: workDir,
-        stdio: ['ignore', 'pipe', 'pipe']
+        cwd: '/tmp',
+        stdio: 'ignore' // 静默忽略输出
       });
-
-      nezhaProc.stdout.on('data', (data) => {
-        console.log(`[Nezha Output]: ${data.toString().trim()}`);
-      });
-
-      nezhaProc.stderr.on('data', (data) => {
-        console.error(`[Nezha Error]: ${data.toString().trim()}`);
-      });
-
-      nezhaProc.on('error', (err) => {
-        console.error(`[Nezha Process Error]: ${err.message}`);
-      });
+      nezhaProc.on('error', () => {});
     }
-  } catch (err) {
-    console.error(`[Nezha Init Failed]: ${err.message}`);
-  }
+  } catch (_) {}
 }
 
-// 6. 启动 WARP
+// 6. 启动 WARP（静默模式）
 function startWarp() {
   if (WARP) {
     const warpProc = spawn('wg-quick', ['up', 'wgcf'], { stdio: 'ignore' });
