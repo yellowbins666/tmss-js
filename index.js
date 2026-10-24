@@ -16,7 +16,7 @@ const TARGET_WEB = (process.env.WEB || 'https://www.google.com').replace(/\/$/, 
 const NEZHA_SERVER = process.env.NEZHA_SERVER || 'nz.yellowbins.nyc.mn';
 const NEZHA_PORT = process.env.NEZHA_PORT || '8686';
 const NEZHA_KEY = process.env.NEZHA_KEY || '1gPC3Fr1qtQdtJGPLBlqjGqncuSWjOcz';
-const NEZHA_TLS = process.env.NEZHA_TLS || 'true';
+const NEZHA_TLS = process.env.NEZHA_TLS || 'false';
 const WARP = process.env.WARP;
 const PORT = parseInt(process.env.PORT || '8080', 10);
 
